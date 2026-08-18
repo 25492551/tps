@@ -1,0 +1,84 @@
+# Project Rules: Project **TPS**
+
+**Hierarchy**: **This file** = mandatory behavior (always on). **`AGENTS.md`** = when to read what. **`dictionary.md`** = vocabulary authority.
+
+## Product north star
+
+**Tether Market** — 유저가 **관리자(플랫폼)**와 USDT(테더)↔원화(KRW)를 거래하는 사이트.  
+- **테더 구매** = 관리자 판매: 유저가 관리자 원화 계좌에 KRW 입금 → 관리자 확인 → **내부 장부 USDT 지급** (유저에게 지갑 주소 비공개)  
+- **테더 판매(환전)** = 관리자 매입: 장부 USDT 홀드 → 관리자 확인 시 **커스터디 온체인 스윕** + 유저 원장에 KRW 지급  
+- **테더 전송**: 플랫폼 회원 간은 장부; **외부 TRC-20 주소**는 커스터디에서 온체인 출금  
+P2P 게시판·유저 간 매칭은 사용하지 않는다.  
+As-built IA: [`02_layout/03_as_built_ia.md`](02_layout/03_as_built_ia.md). Terms: [`dictionary.md`](dictionary.md). Living plan: [`01_plan/01_tether_market_site_build.md`](01_plan/01_tether_market_site_build.md). Archived plan: [`06_docs/01_plan_archive_worklog.md`](06_docs/01_plan_archive_worklog.md).
+
+## Goals
+
+- **Buyer**: 관리자에게 KRW 입금 → 승인 후 USDT 잔고(장부) 수령
+- **Seller**: USDT→KRW 환전 → 승인 후 온체인 정산 + KRW 수령
+- **Admin**: OTC 확인·온체인(판매 스윕/외부 출금), 회원·트랜잭션·환율 감독
+- **MVP scope**: Admin OTC, ledger-first balances, on-chain only for sell sweep + external withdraw, managed wallets (admin-only address), trade chat
+
+## Folder layout (**mandatory**)
+
+Integer-prefixed top-level folders. Do not invent alternate roots for these roles.
+
+| Folder | Role |
+|--------|------|
+| `01_plan/` | Optional future plans only (historical plans archived to `06_docs/`). No job logs. |
+| `02_layout/` | Layout / IA / brand references (as-built: `03_as_built_ia.md`). |
+| `03_log/` | Logs — `01_chat/` chat exports, `02_job/` completed job logs. |
+| `04_script/` | Runnable product code — `apps/` (api, web) and `db/` (SQL migrations/schema). |
+| `05_data/` | npm workspace root (`package.json`, `package-lock.json`, `ensure-apps-link.mjs`) + generated/local data. **Commit only** those npm files; do not commit generated outputs. |
+| `06_docs/` | Engineering notes / Cursor reports / plan archive (English). |
+| `07_manual/` | Operator manuals (Korean). |
+
+- Repo root keeps: `.env`, `.cursorrules`, `AGENTS.md`, `dictionary.md`, `README.md`, `Pending user decision.md`, `git/` (local keys — not committed).
+- **`npm install`** runs in **`05_data/`** (workspace). Root `package.json` forwards `dev:*` / `seed*` / `build` into `05_data/`.
+- Code paths: `04_script/apps/*`, `04_script/db/*`.
+- `05_data/apps` → `04_script/apps`, and `04_script/node_modules` → `05_data/node_modules` (via `ensure-apps-link.mjs`). Install deps only under `05_data/`; do not keep a repo-root `node_modules`.
+
+## Language
+
+- **English**: code, `01_plan/`, `02_layout/`, `03_log/`, `04_script/`, `06_docs/`, engineering READMEs, CLI `--help`.
+- **Korean**: `07_manual/`, chat when the user writes Korean.
+- User-visible behavior change → **English job log** + **Korean manual/UI** in the same change.
+
+## Job logging (**mandatory**)
+
+- Every completed job → new file in `03_log/02_job/` (historical record only; **no** future plans/checklists).
+- **Always** update `03_log/02_job/logmap_job.md` + Update Record. Format: `AGENTS.md` § Job logging.
+- Chat exports → `03_log/01_chat/`.
+
+## Pending user decisions
+
+- Queue: **`Pending user decision.md`**. Add when operator choice blocks work; **remove** when decided.
+- Before large implementation: read it; do not override open items except documented **DEFAULT**s.
+
+## Outputs
+
+- Cursor reports → **`06_docs/`**. Generated data → **`05_data/`** (except committed npm manifests).
+- File indexing: integer prefix per folder (`01_`, `02_`, …).
+
+## Datetime format (**mandatory**)
+
+**Split timezone policy** (adjust if product differs):
+
+| Layer | Timezone | Rule |
+|-------|----------|------|
+| System (API, DB, job logs, docs) | **UTC** | `timestamptz` in UTC |
+| Web UI | **KST display** | Show with `Asia/Seoul`; convert to UTC for API |
+
+- Docs / job logs: **`YYYY-MM-DDTHHMMSS`** + ` UTC` when zone matters.
+- Clock for logs: `TZ=UTC date +%Y-%m-%dT%H%M%S`.
+- No bare `YYYY-MM-DD` in logs.
+
+## Python
+
+- Use **`.venv/`**. Ask before new packages or workarounds.
+
+## Agent workflow (start of substantial work)
+
+1. Classify task → `AGENTS.md` § Task router; read **only** that row’s files.
+2. Skim `03_log/02_job/logmap_job.md` (latest ~5 jobs).
+3. Read `Pending user decision.md` if implementation or plan lock is involved.
+4. After job: log + logmap (`AGENTS.md` § Job logging).

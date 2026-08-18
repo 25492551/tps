@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.venv/
+.env
+*.log
+.dev.vars
+04_script/apps/web/dist/
+
+# Generated / local under 05_data (commit npm manifests + link helper only)
+05_data/**
+!05_data/package.json
+!05_data/package-lock.json
+!05_data/ensure-apps-link.mjs
+
+# Office lock / temp files
+~$*
+**/~$*
+
+# Local keys (never commit)
+git/id_ed25519
+git/id_ed25519.pub
+git/*.pem
+git/*.ppk
+
+# Deploy secrets
+04_script/deploy/gce/.env

@@ -1,0 +1,10 @@
+{
+  "name": "tps-root",
+  "private": true,
+  "scripts": {
+    "dev:api": "npm run dev:api --prefix 05_data",
+    "dev:web": "npm run dev:web --prefix 05_data",
+    "seed": "npm run seed --prefix 05_data",
+    "build": "npm run build --prefix 05_data"
+  }
+}

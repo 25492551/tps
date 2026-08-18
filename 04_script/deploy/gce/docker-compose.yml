@@ -1,0 +1,28 @@
+# TPS on GCE — shares Caddy (gce_s01 network) with S01.
+# S01 keeps bg-demo001.uk → s01:3001
+# TPS uses bgp-001.com → tps:3002 (no host port publish; Caddy only)
+name: tps
+
+services:
+  tps:
+    build:
+      context: ../../..
+      dockerfile: 04_script/deploy/gce/Dockerfile
+    image: tps-app:latest
+    container_name: gce-tps-1
+    restart: unless-stopped
+    env_file: .env
+    expose:
+      - "3002"
+    networks:
+      - gce_s01
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3002/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+networks:
+  gce_s01:
+    external: true

@@ -1,0 +1,11 @@
+.git
+.venv
+node_modules
+**/node_modules
+**/dist
+.env
+*.log
+05_data/node_modules
+03_log
+01_plan
+git

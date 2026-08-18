@@ -1,0 +1,15 @@
+{
+  "name": "tps",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "preinstall": "node ./ensure-apps-link.mjs",
+    "postinstall": "node ./ensure-apps-link.mjs",
+    "dev:api": "npm run dev -w @tps/api",
+    "dev:web": "npm run dev -w @tps/web",
+    "seed": "npm run seed -w @tps/api",
+    "build": "npm run build -w @tps/api && npm run build -w @tps/web"
+  }
+}
