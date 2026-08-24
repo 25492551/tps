@@ -6,6 +6,7 @@
 
 | When (UTC) | File | Summary |
 |------------|------|---------|
+| 2026-08-24T165511 | `2026-08-24T165511_deploy_gce.md` | Deploy GCE: batch UI/API to bgp-001.com |
 | 2026-08-24T165416 | `2026-08-24T165416_table_amount_right_align.md` | Tables: amount columns right-aligned |
 | 2026-08-24T164944 | `2026-08-24T164944_user_nav_reorder_me_trades.md` | User nav: 내 정보 last, 내 거래 above |
 | 2026-08-24T164909 | `2026-08-24T164909_transactions_remove_balance_subtitle.md` | Transactions: remove USDT balance subtitle |
