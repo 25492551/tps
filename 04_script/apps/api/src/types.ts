@@ -1,4 +1,4 @@
-export type UserRole = 'user' | 'admin';
+export type UserRole = 'admin' | 'agent' | 'member';
 export type UserStatus = 'pending_approval' | 'active' | 'suspended' | 'deleted' | 'rejected';
 
 export type PublicUser = {
@@ -10,6 +10,9 @@ export type PublicUser = {
   canBuyTether: boolean;
   canSellTether: boolean;
   createdAt: string;
+  partnerId?: string | null;
+  partnerCode?: string | null;
+  partnerName?: string | null;
 };
 
 export type DbUser = {
@@ -17,7 +20,7 @@ export type DbUser = {
   email: string;
   password_hash: string;
   display_name: string;
-  role: UserRole;
+  role: UserRole | 'user';
   status: UserStatus;
   can_buy_tether?: boolean;
   can_sell_tether?: boolean;
@@ -25,15 +28,31 @@ export type DbUser = {
   updated_at: Date;
 };
 
+function normalizeRole(role: string): UserRole {
+  if (role === 'admin' || role === 'agent' || role === 'member') return role;
+  if (role === 'user') return 'member';
+  return 'member';
+}
+
 export function toPublicUser(u: DbUser): PublicUser {
+  const role = normalizeRole(u.role);
   return {
     id: u.id,
     email: u.email,
     displayName: u.display_name,
-    role: u.role,
+    role,
     status: u.status,
-    canBuyTether: u.role === 'admin' ? true : u.can_buy_tether !== false,
-    canSellTether: u.role === 'admin' ? true : u.can_sell_tether !== false,
+    canBuyTether: role === 'admin' ? true : u.can_buy_tether !== false,
+    canSellTether: role === 'admin' ? true : u.can_sell_tether !== false,
     createdAt: u.created_at.toISOString(),
   };
+}
+
+/** End-user roles that trade on /app (not admin/agent portal). */
+export function isMemberRole(role: string): boolean {
+  return normalizeRole(role) === 'member';
+}
+
+export function isAgentRole(role: string): boolean {
+  return normalizeRole(role) === 'agent';
 }

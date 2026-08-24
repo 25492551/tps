@@ -24,8 +24,10 @@ npm run dev:web   # http://localhost:5173  ( /api 프록시 )
 
 ## 데모 로그인
 
-- 관리자: `admin@tps.local` / `admin123`
-- 유저: `buyer@tps.local` 또는 `seller@tps.local` / `demo1234`
+- 관리자: `admin` / `admin123` → `/admin-login` (자동 접속 방지 문자) → `/admin`
+- 유저(member): `buyer` 또는 `seller` / `demo1234` → `/app/wallets`
+- 에이전트: 관리자 **유저 관리**에서 역할 `agent` + 솔루션 지정 후 해당 계정으로 로그인 → `/agent`
+- 아이디는 이메일 형식이 아닌 일반 텍스트이며, **대소문자를 구분하지 않습니다**.
 
 ## 프로덕션 도메인 (GCE, S01과 동일 VM)
 

@@ -51,7 +51,7 @@ export async function ensureDefaultManagedWallet(
 export async function backfillDefaultManagedWallets() {
   const users = await query<{ id: string }>(
     `SELECT u.id FROM users u
-     WHERE u.role = 'user' AND u.status IN ('active', 'suspended')
+     WHERE u.role IN ('member', 'agent') AND u.status IN ('active', 'suspended')
        AND NOT EXISTS (
          SELECT 1 FROM tether_wallets w WHERE w.user_id = u.id AND w.is_default = true
        )`,

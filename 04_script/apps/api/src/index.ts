@@ -14,6 +14,7 @@ import { tradesRouter } from './routes/trades.js';
 import { transfersRouter } from './routes/transfers.js';
 import { transactionsRouter } from './routes/transactions.js';
 import { partnerRouter } from './partner/routes.js';
+import { agentRouter } from './routes/agent.js';
 import { attachWs } from './ws.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/auth', authRouter);
 app.use('/api/partner/v1', partnerRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/agent', agentRouter);
 app.use('/api', assetsRouter);
 app.use('/api/listings', listingsRouter);
 app.use('/api/orders', ordersRouter);

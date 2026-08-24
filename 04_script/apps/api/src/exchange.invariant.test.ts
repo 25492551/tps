@@ -22,13 +22,13 @@ async function main() {
   const hash = await hashPassword('x');
   const buyer = await query(
     `INSERT INTO users (email, password_hash, display_name, role, status)
-     VALUES ($1,$2,'TBuyer','user','active') RETURNING id`,
-    [`tbuyer-${suffix}@test.local`, hash],
+     VALUES ($1,$2,'TBuyer','member','active') RETURNING id`,
+    [`tbuyer-${suffix}`, hash],
   );
   const seller = await query(
     `INSERT INTO users (email, password_hash, display_name, role, status)
-     VALUES ($1,$2,'TSeller','user','active') RETURNING id`,
-    [`tseller-${suffix}@test.local`, hash],
+     VALUES ($1,$2,'TSeller','member','active') RETURNING id`,
+    [`tseller-${suffix}`, hash],
   );
   const listing = await query(
     `INSERT INTO listings (type, owner_user_id, price_krw_per_usdt, amount_usdt, status)

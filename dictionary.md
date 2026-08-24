@@ -12,22 +12,30 @@
 
 | Term | Meaning |
 |------|---------|
-| Buyer | User buying USDT from admin; pays KRW to admin bank; receives USDT on **internal ledger** (shown as normal balance; no address shown) |
-| Seller | User converting USDT→KRW; ledger hold then admin settle: **on-chain custody hot→cold sweep** + KRW ledger credit |
+| Buyer | Member buying USDT from admin; pays KRW to admin bank; receives USDT on **internal ledger** |
+| Seller | Member converting USDT→KRW; ledger hold then admin settle: on-chain custody sweep; KRW paid off-platform |
+| Member | End-user role (`users.role=member`); uses `/app` |
+| Agent | Solution-scoped role (`users.role=agent`); **one per partner**; uses `/agent` to view that solution’s member transactions |
 | Admin | OTC counterparty; confirms KRW / sell settle; holds custody keys; may see addresses |
 
 ## 3. Money / status terms
 
 | Term | Meaning |
 |------|---------|
-| OTC order | `buy_from_admin` (ledger USDT) or `sell_to_admin` (ledger hold + on-chain sweep + KRW) |
+| OTC buy KRW | Buy-from-admin: `amount_krw` is whole won; `amount_usdt` = floor(KRW÷rate, 2) |
+| OTC sell KRW | Sell-to-admin: `amount_usdt` to 2dp; `amount_krw` = floor(USDT×rate) whole won (no fractional won) |
 | Admin bank / custody wallet | KRW bank for buys; custody TRC-20 hot/cold for inventory (`/admin/wallets`) |
 | Custody wallet transfer | Admin ops record for moving USDT between custody wallets |
 | Hold | Ops/ledger hold while sell awaits admin settle |
-| Ledger | Primary user balances; buy/internal transfer stay ledger-only |
-| On-chain settle | **Sell**: custody hot → cold/sweep; **External withdraw**: custody → external address |
+| Ledger | Primary **USDT** balances; buy/internal transfer stay ledger-only. No user-facing KRW wallet |
+| On-chain settle | **Sell**: optional custody hot→cold when cold wallet configured; otherwise ledger-only complete. **External withdraw**: custody → external address |
 | Partner | External solution consuming TPS partner API (`partners.code`, e.g. `s01`) |
+| Partner API key | Per-solution **public (access)** + **private (secret)** pair. Admin **API 키 관리** `/admin/solution-keys` shows both. Auth header uses the private key (`X-Partner-Key` / Bearer). Hash stored; secret also encrypted for admin display |
 | Partner member | Mapped S01/external account → TPS `users` via `partner_members` |
+| Login id | Plain-text account id in `users.email` (not email format). Always stored **lowercase**; login is **case-insensitive** |
+| Solution name | Partner display name (`partners.name`) shown on `/admin/users` |
+| Bank change request | User submits KRW bank via `/app/me` (등록 요청); admin approves at `/admin/bank-requests` |
+| Bank soft-delete | User marks `bank_accounts.status = deleted` (row kept); hidden from user list |
 | Handoff | Short-lived SSO token; `/handoff` → user JWT → transfer UI |
 | Virtual deposit address | UI-only fake TRC-20 address; transfer debits USDT and credits partner game money |
 | Partner credit | `partner_credit_out` ledger + partner callback (no on-chain) |
@@ -37,6 +45,9 @@
 | Trade chat (WebSocket) | Messages scoped to an OTC trade between user and admin |
 | Multi-account browser login | User-slot lock only; admin session separate |
 | User session token | `tps_token_user` — `/app/*` + `/api/ws/user` |
+| Agent fee percent | Per-partner platform cut (`partners.agent_fee_percent`); leaf agent due = floor(gross×(1−%/100)). Parent agents take differential of lower fee % from the fee pool; admin takes remainder |
+| Agent partner tree | `partners.parent_partner_id` hierarchy (S01-style). Child fee % ≥ parent fee % |
+| Agent settlement | Admin period settle of unsettled OTC buys; records leaf agent due + parent shares + admin fee; offline KRW payout |
 | Admin session token | `tps_token_admin` — `/admin/*` + `/api/ws/admin` |
 | FX rate provider | Source for KRW/USDT spot at OTC order create |
 | FX buy fee percent | Fee % on user buy-from-admin: spot×(1+fee/100) |

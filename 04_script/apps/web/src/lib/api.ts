@@ -2,36 +2,47 @@ export type User = {
   id: string;
   email: string;
   displayName: string;
-  role: 'user' | 'admin';
+  role: 'admin' | 'agent' | 'member';
   status: string;
   canBuyTether: boolean;
   canSellTether: boolean;
   createdAt: string;
+  partnerId?: string | null;
+  partnerCode?: string | null;
+  partnerName?: string | null;
 };
 
-/** Portal session slot — admin and user tokens coexist in one browser. */
-export type AuthPortal = 'user' | 'admin';
+/** Portal session slots — admin / agent / member can coexist in one browser. */
+export type AuthPortal = 'user' | 'admin' | 'agent';
 
 const TOKEN_USER_KEY = 'tps_token_user';
 const TOKEN_ADMIN_KEY = 'tps_token_admin';
+const TOKEN_AGENT_KEY = 'tps_token_agent';
 const LEGACY_TOKEN_KEY = 'tps_token';
 const BROWSER_USER_KEY = 'tps_browser_user_id';
 
 function tokenKey(portal: AuthPortal) {
-  return portal === 'admin' ? TOKEN_ADMIN_KEY : TOKEN_USER_KEY;
+  if (portal === 'admin') return TOKEN_ADMIN_KEY;
+  if (portal === 'agent') return TOKEN_AGENT_KEY;
+  return TOKEN_USER_KEY;
 }
 
-/** Infer portal from current URL (admin routes vs everything else). */
+/** Infer portal from current URL. */
 export function resolvePortal(pathname = typeof location !== 'undefined' ? location.pathname : '/'): AuthPortal {
-  return pathname.startsWith('/admin') ? 'admin' : 'user';
+  if (pathname === '/admin' || pathname.startsWith('/admin/')) return 'admin';
+  if (pathname === '/agent' || pathname.startsWith('/agent/')) return 'agent';
+  return 'user';
 }
 
 /** One-time migrate legacy single `tps_token` into the matching portal slot. */
 export function migrateLegacyToken() {
   const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
   if (!legacy) return;
-  // Prefer leaving it in user slot; /me refresh will clear if role mismatches.
-  if (!localStorage.getItem(TOKEN_USER_KEY) && !localStorage.getItem(TOKEN_ADMIN_KEY)) {
+  if (
+    !localStorage.getItem(TOKEN_USER_KEY) &&
+    !localStorage.getItem(TOKEN_ADMIN_KEY) &&
+    !localStorage.getItem(TOKEN_AGENT_KEY)
+  ) {
     localStorage.setItem(TOKEN_USER_KEY, legacy);
   }
   localStorage.removeItem(LEGACY_TOKEN_KEY);
@@ -49,10 +60,18 @@ export function setToken(token: string | null, portal: AuthPortal) {
 }
 
 export function portalForRole(role: User['role']): AuthPortal {
-  return role === 'admin' ? 'admin' : 'user';
+  if (role === 'admin') return 'admin';
+  if (role === 'agent') return 'agent';
+  return 'user';
 }
 
-/** Sticky browser-account lock for the **user** portal (admins never locked). */
+export function homePathForRole(role: User['role']): string {
+  if (role === 'admin') return '/admin';
+  if (role === 'agent') return '/agent';
+  return '/app/wallets';
+}
+
+/** Sticky browser-account lock for the **user** portal (admins/agents never locked). */
 export function getBrowserUserId() {
   return localStorage.getItem(BROWSER_USER_KEY);
 }
@@ -109,6 +128,20 @@ export function formatNum(value: unknown): string {
   });
 }
 
+/** Whole-won KRW display (no fraction). */
+export function formatKrw(value: unknown): string {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return '—';
+  return Math.round(n).toLocaleString('ko-KR');
+}
+
+/** Whole-won KRW estimate from USDT × sell-side spot (floor). */
+export function estimateUsdtKrw(usdt: number | null | undefined, rateKrwPerUsdt: number | null | undefined): number | null {
+  if (usdt == null || !Number.isFinite(usdt)) return null;
+  if (rateKrwPerUsdt == null || !(rateKrwPerUsdt > 0)) return null;
+  return Math.floor(usdt * rateKrwPerUsdt + 1e-9);
+}
+
 /** Round to 2 decimal places for amounts sent to the API. */
 export function round2(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value);
@@ -116,32 +149,35 @@ export function round2(value: unknown): number {
   return Math.round(n * 100) / 100;
 }
 
+/** Floor to 2 decimal places (OTC buy USDT). */
+export function floor2(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.floor(n * 100 + 1e-9) / 100;
+}
+
 export function statusBadge(status: string) {
-  if (['active', 'completed', 'received', 'open', 'exchanged', 'both_held'].includes(status)) {
+  if (['active', 'completed', 'received', 'open', 'exchanged', 'both_held', 'approved', 'member'].includes(status)) {
     return 'ok';
   }
   if (
     [
+      'pending',
       'pending_approval',
-      'awaiting',
-      'awaiting_dual_deposit',
       'awaiting_user_deposit',
       'awaiting_admin_payout',
       'settling_onchain',
-      'pending',
-      'krw_confirmed',
-      'usdt_confirmed',
+      'agent',
     ].includes(status)
   ) {
     return 'warn';
   }
-  return 'bad';
+  return 'danger';
 }
 
-/** WebSocket URL for the given portal (separate sockets). */
 export function wsUrl(portal: AuthPortal = resolvePortal()) {
-  const token = getToken(portal);
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const path = portal === 'admin' ? '/api/ws/admin' : '/api/ws/user';
+  const token = getToken(portal);
   return `${proto}://${location.host}${path}?token=${encodeURIComponent(token || '')}`;
 }

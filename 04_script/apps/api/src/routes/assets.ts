@@ -26,7 +26,6 @@ assetsRouter.get('/wallets', async (req: AuthedRequest, res) => {
     [req.user!.id],
   );
   const ledgerUsdt = await getBalance(req.user!.id, 'usdt');
-  const ledgerKrw = await getBalance(req.user!.id, 'krw');
   res.json({
     wallets: result.rows.map((w) => ({
       id: w.id,
@@ -39,9 +38,7 @@ assetsRouter.get('/wallets', async (req: AuthedRequest, res) => {
     })),
     balances: {
       usdt: ledgerUsdt,
-      krw: ledgerKrw,
       ledgerUsdt,
-      ledgerKrw,
     },
   });
 });
@@ -115,19 +112,47 @@ assetsRouter.post('/wallets/transfer', requireActiveTrader, async (req: AuthedRe
 });
 
 assetsRouter.get('/bank-accounts', async (req: AuthedRequest, res) => {
-  const result = await query(
-    `SELECT id, bank_code, bank_name, account_no, holder_name, status, verified_at, created_at
-     FROM bank_accounts WHERE user_id = $1 AND is_custody = false
-     ORDER BY created_at DESC`,
+  const accounts = await query(
+    `SELECT id, bank_name, account_no, holder_name, status, verified_at, created_at
+     FROM bank_accounts
+     WHERE user_id = $1 AND is_custody = false AND status <> 'deleted'
+     ORDER BY
+       CASE status WHEN 'active' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
+       created_at DESC`,
     [req.user!.id],
   );
-  res.json({ bankAccounts: result.rows });
+  const pending = await query(
+    `SELECT id, bank_name, account_no, holder_name, status, created_at, review_note
+     FROM bank_change_requests
+     WHERE user_id = $1 AND status = 'pending'
+     ORDER BY created_at DESC LIMIT 1`,
+    [req.user!.id],
+  );
+  res.json({
+    bankAccounts: accounts.rows,
+    pendingRequest: pending.rows[0] ?? null,
+  });
+});
+
+/** Soft-delete: mark status deleted; keep row. */
+assetsRouter.post('/bank-accounts/:id/delete', requireActiveTrader, async (req: AuthedRequest, res) => {
+  const result = await query(
+    `UPDATE bank_accounts
+     SET status = 'deleted'
+     WHERE id = $1 AND user_id = $2 AND is_custody = false AND status <> 'deleted'
+     RETURNING id, status`,
+    [String(req.params.id), req.user!.id],
+  );
+  if (!result.rowCount) {
+    res.status(404).json({ error: '삭제할 계좌가 없습니다' });
+    return;
+  }
+  res.json({ bankAccount: result.rows[0] });
 });
 
 assetsRouter.post('/bank-accounts', requireActiveTrader, async (req: AuthedRequest, res) => {
   const body = z
     .object({
-      bankCode: z.string().min(1).max(20),
       bankName: z.string().min(1).max(80),
       accountNo: z.string().min(4).max(40),
       holderName: z.string().min(1).max(80),
@@ -137,19 +162,48 @@ assetsRouter.post('/bank-accounts', requireActiveTrader, async (req: AuthedReque
     res.status(400).json({ error: body.error.flatten() });
     return;
   }
+  const accountNo = body.data.accountNo.replace(/\D/g, '') || body.data.accountNo.trim();
+  if (accountNo.length < 4) {
+    res.status(400).json({ error: '유효한 계좌번호(숫자 4자리 이상)가 필요합니다' });
+    return;
+  }
+  try {
+    const inserted = await query(
+      `INSERT INTO bank_change_requests
+        (user_id, bank_name, account_no, holder_name, status)
+       VALUES ($1,$2,$3,$4,'pending')
+       RETURNING *`,
+      [
+        req.user!.id,
+        body.data.bankName.trim(),
+        accountNo,
+        body.data.holderName.trim(),
+      ],
+    );
+    res.status(201).json({ request: inserted.rows[0] });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes('bank_change_requests_one_pending_uidx') || msg.includes('unique')) {
+      res.status(409).json({ error: '이미 대기 중인 등록 요청이 있습니다. 승인·거절 후 다시 요청하세요.' });
+      return;
+    }
+    res.status(400).json({ error: msg });
+  }
+});
+
+assetsRouter.post('/bank-accounts/requests/:id/cancel', requireActiveTrader, async (req: AuthedRequest, res) => {
   const result = await query(
-    `INSERT INTO bank_accounts
-      (user_id, is_custody, bank_code, bank_name, account_no, holder_name, status)
-     VALUES ($1, false, $2, $3, $4, $5, 'active') RETURNING *`,
-    [
-      req.user!.id,
-      body.data.bankCode,
-      body.data.bankName,
-      body.data.accountNo,
-      body.data.holderName,
-    ],
+    `UPDATE bank_change_requests
+     SET status = 'cancelled', updated_at = now()
+     WHERE id = $1 AND user_id = $2 AND status = 'pending'
+     RETURNING *`,
+    [String(req.params.id), req.user!.id],
   );
-  res.status(201).json({ bankAccount: result.rows[0] });
+  if (!result.rowCount) {
+    res.status(404).json({ error: '취소할 대기 요청이 없습니다' });
+    return;
+  }
+  res.json({ request: result.rows[0] });
 });
 
 assetsRouter.get('/withdrawals', async (req: AuthedRequest, res) => {

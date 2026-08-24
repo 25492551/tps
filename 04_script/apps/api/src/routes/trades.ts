@@ -39,7 +39,7 @@ async function tradeBundle(id: string, viewer?: { id: string; role: string }) {
   const deposits = await query(`SELECT * FROM deposit_intents WHERE trade_id = $1`, [id]);
   const holds = await query(`SELECT * FROM holds WHERE trade_id = $1`, [id]);
   const custodyBanks = await query(
-    `SELECT id, bank_code, bank_name, account_no, holder_name FROM bank_accounts WHERE is_custody = true AND status = 'active' LIMIT 1`,
+    `SELECT id, bank_name, account_no, holder_name FROM bank_accounts WHERE is_custody = true AND status = 'active' LIMIT 1`,
   );
   const isAdmin = viewer?.role === 'admin';
   let custodyWallet: { id: string; chain: string; address?: string; label: string } | null = null;
@@ -155,6 +155,24 @@ tradesRouter.post(
           res.status(400).json({ error: 'Sell orders only need USDT confirm' });
           return;
         }
+        // #region agent log
+        try {
+          const fs = await import('node:fs');
+          fs.appendFileSync(
+            '/tmp/debug-307f1d.log',
+            `${JSON.stringify({
+              sessionId: '307f1d',
+              hypothesisId: 'D',
+              location: 'trades.ts:sellConfirm',
+              message: 'admin confirm sell path',
+              data: { tradeId, side, tradeStatus: trade.status },
+              timestamp: Date.now(),
+            })}\n`,
+          );
+        } catch {
+          /* ignore */
+        }
+        // #endregion
         const result = await settleOtcSellOnChain(tradeId, req.user!.id, {
           txRef: body.data.txRef,
           proofNote: body.data.proofNote,

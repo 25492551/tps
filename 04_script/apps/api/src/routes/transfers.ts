@@ -25,7 +25,7 @@ transfersRouter.post('/', requireAuth, requireActiveTrader, async (req: AuthedRe
     .object({
       amountUsdt: z.number().positive(),
       toUserId: z.string().uuid().optional(),
-      toEmail: z.string().email().optional(),
+      toEmail: z.string().min(1).max(80).optional(),
       toAddress: z.string().optional(),
     })
     .safeParse(req.body);
@@ -136,8 +136,8 @@ transfersRouter.post('/', requireAuth, requireActiveTrader, async (req: AuthedRe
       let toId = toUserId;
       if (!toId && toEmail) {
         const u = await client.query<{ id: string; role: string; status: string }>(
-          `SELECT id, role, status FROM users WHERE email = $1`,
-          [toEmail.toLowerCase()],
+          `SELECT id, role, status FROM users WHERE lower(email) = $1`,
+          [toEmail.trim().toLowerCase()],
         );
         if (!u.rowCount) throw new Error('수신자를 찾을 수 없습니다.');
         toId = u.rows[0].id;

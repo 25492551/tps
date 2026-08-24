@@ -1,8 +1,32 @@
 import type pg from 'pg';
+import fs from 'node:fs';
 import { query, withTransaction } from './db.js';
 import { appendLedger } from './ledger.js';
 import { loadDefaultCustodyHotWallet } from './otcWallets.js';
 import { transferTronUsdt } from './tronTransfer.js';
+
+// #region agent log
+function dbg(hypothesisId: string, location: string, message: string, data: Record<string, unknown> = {}) {
+  const line = JSON.stringify({
+    sessionId: '307f1d',
+    hypothesisId,
+    location,
+    message,
+    data,
+    timestamp: Date.now(),
+  });
+  try {
+    fs.appendFileSync('/tmp/debug-307f1d.log', `${line}\n`);
+  } catch {
+    /* ignore */
+  }
+  fetch('http://127.0.0.1:7603/ingest/16484438-b468-4662-a4bc-8cd4b1e4f72a', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '307f1d' },
+    body: line,
+  }).catch(() => {});
+}
+// #endregion
 
 type TradeRow = {
   id: string;
@@ -137,28 +161,88 @@ async function failSellSettle(tradeId: string) {
 
 /**
  * Sell (USDT→KRW): ledger already holds USDT from order create.
- * Real on-chain: sweep amount from default custody hot → cold/sweep address.
- * Then credit KRW ledger.
+ * If a cold/sweep custody wallet (or OTC_SELL_SWEEP_ADDRESS) exists, attempt hot→cold on-chain.
+ * Otherwise complete as **ledger-only** (KRW still paid off-platform by admin).
  */
 export async function settleOtcSellOnChain(
   tradeId: string,
   adminId: string,
   opts: { txRef?: string; proofNote?: string } = {},
 ) {
+  // #region agent log
+  dbg('A', 'otcSettle.ts:settleOtcSellOnChain:entry', 'sell settle start', {
+    tradeId,
+    adminIdPrefix: adminId.slice(0, 8),
+  });
+  // #endregion
   const trade = await beginSellSettle(tradeId, adminId, opts);
+  // #region agent log
+  dbg('C', 'otcSettle.ts:afterBeginSellSettle', 'trade after begin', {
+    tradeId: trade.id,
+    status: trade.status,
+    amountUsdt: trade.amount_usdt,
+  });
+  // #endregion
   const sweepTo = await loadSellSweepAddress();
+  // #region agent log
+  dbg('A', 'otcSettle.ts:loadSellSweepAddress', 'sweep target resolved', {
+    hasSweepTo: !!sweepTo,
+    sweepToPrefix: sweepTo ? sweepTo.slice(0, 8) : null,
+  });
+  // #endregion
+
+  async function completeLedgerOnly(note: string) {
+    await withTransaction(async (client) => {
+      await client.query(
+        `UPDATE holds SET status = 'exchanged', updated_at = now() WHERE trade_id = $1 AND status = 'held'`,
+        [trade.id],
+      );
+      await client.query(
+        `UPDATE deposit_intents SET proof_note = COALESCE(NULLIF(proof_note,''), $2)
+         WHERE trade_id = $1 AND side = 'seller_usdt'`,
+        [trade.id, note],
+      );
+      await client.query(
+        `UPDATE trades SET status = 'completed', updated_at = now()
+         WHERE id = $1 AND status = 'settling_onchain'`,
+        [trade.id],
+      );
+    });
+    // #region agent log
+    dbg('A', 'otcSettle.ts:ledgerOnlyComplete', 'sell completed ledger-only', {
+      tradeId: trade.id,
+      note,
+    });
+    // #endregion
+    return {
+      tradeId: trade.id,
+      status: 'completed' as const,
+      onchainTxId: null as string | null,
+      fromAddress: null as string | null,
+      toAddress: null as string | null,
+      ledgerOnly: true as const,
+    };
+  }
+
   if (!sweepTo) {
-    await failSellSettle(tradeId);
-    throw new Error(
-      '판매 온체인 정산 대상(콜드) 지갑이 없습니다. OTC_SELL_SWEEP_ADDRESS 또는 기본이 아닌 커스터디 지갑을 추가하세요.',
-    );
+    return completeLedgerOnly('ledger-only settle (no cold/sweep wallet)');
   }
 
   try {
     const custody = await loadDefaultCustodyHotWallet();
     if (custody.address === sweepTo) {
-      throw new Error('Sell sweep address must differ from default custody wallet');
+      // #region agent log
+      dbg('A', 'otcSettle.ts:sweepEqualsHot', 'fallback ledger-only', { tradeId: trade.id });
+      // #endregion
+      return completeLedgerOnly('ledger-only settle (sweep equals hot wallet)');
     }
+    // #region agent log
+    dbg('E', 'otcSettle.ts:beforeTransfer', 'about to transferTronUsdt', {
+      fromPrefix: custody.address.slice(0, 8),
+      toPrefix: sweepTo.slice(0, 8),
+      amountUsdt: Number(trade.amount_usdt),
+    });
+    // #endregion
     const sent = await transferTronUsdt({
       fromPrivateKeyHex: custody.privateKeyHex,
       toAddress: sweepTo,
@@ -166,15 +250,7 @@ export async function settleOtcSellOnChain(
     });
 
     await withTransaction(async (client) => {
-      await appendLedger(client, {
-        userId: trade.seller_user_id,
-        asset: 'krw',
-        direction: 'credit',
-        amount: Number(trade.amount_krw),
-        refType: 'otc_sell',
-        refId: trade.id,
-        note: 'USDT→KRW 환전 완료',
-      });
+      // Platform manages USDT only — KRW payout is off-platform (admin bank transfer).
       await client.query(
         `UPDATE holds SET status = 'exchanged', updated_at = now() WHERE trade_id = $1 AND status = 'held'`,
         [trade.id],
@@ -197,9 +273,16 @@ export async function settleOtcSellOnChain(
       onchainTxId: sent.txId,
       fromAddress: sent.fromAddress,
       toAddress: sent.toAddress,
+      ledgerOnly: false as const,
     };
   } catch (e) {
     await failSellSettle(tradeId);
+    // #region agent log
+    dbg('E', 'otcSettle.ts:transferCatch', 'sell settle failed', {
+      tradeId,
+      err: e instanceof Error ? e.message : String(e),
+    });
+    // #endregion
     throw e;
   }
 }

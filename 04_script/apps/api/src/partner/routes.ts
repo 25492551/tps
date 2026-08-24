@@ -3,22 +3,23 @@ import { z } from 'zod';
 import { hashPassword } from '../auth.js';
 import { query, withTransaction } from '../db.js';
 import { getBalance } from '../ledger.js';
+import { disableOtherActiveBanks } from '../bankAccounts.js';
 import { ensureDefaultManagedWallet } from '../managedWallet.js';
 import { signHandoffToken } from './crypto.js';
 import { requirePartnerKey, type PartnerRequest } from './partners.js';
+import { assertLoginId } from '../loginId.js';
 
 export const partnerRouter = Router();
 partnerRouter.use(requirePartnerKey);
 
-function syntheticEmail(partnerCode: string, loginId: string) {
-  const safe = loginId.toLowerCase().replace(/[^a-z0-9._+-]/g, '_').slice(0, 64);
-  return `${partnerCode}+${safe}@partner.local`;
+function partnerLoginId(loginId: string) {
+  return assertLoginId(loginId);
 }
-
 const bankSchema = z.object({
   bankName: z.string().min(1).max(80),
   bankAccount: z.string().min(4).max(40),
   bankHolder: z.string().min(1).max(80),
+  /** Accepted for backward compatibility; ignored (column dropped). */
   bankCode: z.string().max(20).optional(),
 });
 
@@ -30,28 +31,25 @@ async function upsertBank(
   const existing = await client.query(
     `SELECT id FROM bank_accounts
      WHERE user_id = $1 AND is_custody = false AND status = 'active'
-     ORDER BY created_at ASC LIMIT 1`,
+     ORDER BY created_at DESC, id DESC LIMIT 1`,
     [userId],
   );
   if (existing.rowCount) {
+    const keepId = existing.rows[0].id as string;
     await client.query(
       `UPDATE bank_accounts
-       SET bank_code = $2, bank_name = $3, account_no = $4, holder_name = $5
+       SET bank_name = $2, account_no = $3, holder_name = $4
        WHERE id = $1`,
-      [
-        existing.rows[0].id,
-        bank.bankCode || '000',
-        bank.bankName,
-        bank.bankAccount,
-        bank.bankHolder,
-      ],
+      [keepId, bank.bankName, bank.bankAccount, bank.bankHolder],
     );
+    await disableOtherActiveBanks(userId, keepId, client);
   } else {
+    await disableOtherActiveBanks(userId, null, client);
     await client.query(
       `INSERT INTO bank_accounts
-        (user_id, is_custody, bank_code, bank_name, account_no, holder_name, status, verified_at)
-       VALUES ($1, false, $2, $3, $4, $5, 'active', now())`,
-      [userId, bank.bankCode || '000', bank.bankName, bank.bankAccount, bank.bankHolder],
+        (user_id, is_custody, bank_name, account_no, holder_name, status, verified_at)
+       VALUES ($1, false, $2, $3, $4, 'active', now())`,
+      [userId, bank.bankName, bank.bankAccount, bank.bankHolder],
     );
   }
 }
@@ -76,11 +74,17 @@ partnerRouter.post('/members', async (req: PartnerRequest, res) => {
   }
   const partner = req.partner!;
   const d = body.data;
+  let loginId: string;
+  try {
+    loginId = partnerLoginId(d.loginId);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : 'Invalid loginId' });
+    return;
+  }
   const bank = {
     bankName: d.bankName,
     bankAccount: d.bankAccount,
     bankHolder: d.bankHolder,
-    bankCode: d.bankCode,
   };
 
   try {
@@ -95,19 +99,18 @@ partnerRouter.post('/members', async (req: PartnerRequest, res) => {
       if (mapR.rowCount) {
         userId = mapR.rows[0].user_id;
         await client.query(
-          `UPDATE users SET display_name = $2, updated_at = now() WHERE id = $1`,
-          [userId, d.nickname || d.loginId],
+          `UPDATE users SET email = $2, display_name = $3, updated_at = now() WHERE id = $1`,
+          [userId, loginId, d.nickname || d.loginId],
         );
         await client.query(
           `UPDATE partner_members SET external_login_id = $2, updated_at = now() WHERE id = $1`,
           [mapR.rows[0].id, d.loginId],
         );
       } else {
-        const email = syntheticEmail(partner.code, d.loginId);
         const pw = await hashPassword(`partner:${partner.code}:${d.externalUserId}:${Date.now()}`);
-        const existingEmail = await client.query(`SELECT id FROM users WHERE email = $1`, [email]);
-        if (existingEmail.rowCount) {
-          userId = existingEmail.rows[0].id;
+        const existingLogin = await client.query(`SELECT id FROM users WHERE lower(email) = $1`, [loginId]);
+        if (existingLogin.rowCount) {
+          userId = existingLogin.rows[0].id;
           await client.query(
             `UPDATE users SET display_name = $2, status = 'active', updated_at = now() WHERE id = $1`,
             [userId, d.nickname || d.loginId],
@@ -115,8 +118,8 @@ partnerRouter.post('/members', async (req: PartnerRequest, res) => {
         } else {
           const u = await client.query<{ id: string }>(
             `INSERT INTO users (email, password_hash, display_name, role, status)
-             VALUES ($1,$2,$3,'user','active') RETURNING id`,
-            [email, pw, d.nickname || d.loginId],
+             VALUES ($1,$2,$3,'member','active') RETURNING id`,
+            [loginId, pw, d.nickname || d.loginId],
           );
           userId = u.rows[0].id;
         }
@@ -172,17 +175,16 @@ partnerRouter.post('/members/:externalUserId/bank', async (req: PartnerRequest, 
   try {
     await withTransaction(async (client) => {
       const existing = await client.query(
-        `SELECT id FROM bank_accounts WHERE user_id = $1 AND is_custody = false LIMIT 1`,
+        `SELECT id FROM bank_accounts WHERE user_id = $1 AND is_custody = false AND status <> 'deleted' LIMIT 1`,
         [map.rows[0].user_id],
       );
       if (existing.rowCount) {
         await client.query(
           `UPDATE bank_accounts
-           SET bank_code = $2, bank_name = $3, account_no = $4, holder_name = $5
+           SET bank_name = $2, account_no = $3, holder_name = $4
            WHERE id = $1`,
           [
             existing.rows[0].id,
-            bank.data.bankCode || '000',
             bank.data.bankName,
             bank.data.bankAccount,
             bank.data.bankHolder,
@@ -191,11 +193,10 @@ partnerRouter.post('/members/:externalUserId/bank', async (req: PartnerRequest, 
       } else {
         await client.query(
           `INSERT INTO bank_accounts
-            (user_id, is_custody, bank_code, bank_name, account_no, holder_name, status, verified_at)
-           VALUES ($1, false, $2, $3, $4, $5, 'active', now())`,
+            (user_id, is_custody, bank_name, account_no, holder_name, status, verified_at)
+           VALUES ($1, false, $2, $3, $4, 'active', now())`,
           [
             map.rows[0].user_id,
-            bank.data.bankCode || '000',
             bank.data.bankName,
             bank.data.bankAccount,
             bank.data.bankHolder,

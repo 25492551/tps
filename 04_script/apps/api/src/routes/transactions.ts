@@ -28,20 +28,17 @@ function displayTxId(id: string) {
 
 transactionsRouter.get('/', requireAuth, async (req: AuthedRequest, res) => {
   const result = await query(
-    `SELECT * FROM ledger_entries WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`,
+    `SELECT * FROM ledger_entries WHERE user_id = $1 AND asset = 'usdt'
+     ORDER BY created_at DESC LIMIT 200`,
     [req.user!.id],
   );
-  const [krw, usdt] = await Promise.all([
-    getBalance(req.user!.id, 'krw'),
-    getBalance(req.user!.id, 'usdt'),
-  ]);
+  const usdt = await getBalance(req.user!.id, 'usdt');
   res.json({
-    balances: { krw, usdt },
+    balances: { usdt },
     transactions: result.rows.map((t) => ({
       ...t,
       title: REF_LABELS[t.ref_type] || t.note || t.ref_type,
       displayTxId: displayTxId(t.id),
-      // keep raw fields for admin-style tools; UI prefers title/displayTxId
     })),
   });
 });

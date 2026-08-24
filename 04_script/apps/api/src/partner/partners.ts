@@ -7,6 +7,8 @@ export type PartnerRow = {
   code: string;
   name: string;
   api_key_hash: string;
+  api_key_prefix?: string;
+  api_key_issued_at?: string | null;
   callback_base_url: string;
   callback_path: string;
   callback_secret: string;
@@ -16,6 +18,10 @@ export type PartnerRow = {
 };
 
 export type PartnerRequest = Request & { partner?: PartnerRow };
+
+function hasIssuedApiKey(p: { api_key_hash: string | null | undefined }): boolean {
+  return !!(p.api_key_hash && p.api_key_hash.length === 64);
+}
 
 export async function requirePartnerKey(req: PartnerRequest, res: Response, next: NextFunction) {
   const header =
@@ -28,7 +34,10 @@ export async function requirePartnerKey(req: PartnerRequest, res: Response, next
     return;
   }
   const result = await query<PartnerRow>(
-    `SELECT * FROM partners WHERE status = 'active'`,
+    `SELECT * FROM partners
+     WHERE status = 'active'
+       AND api_key_hash IS NOT NULL
+       AND length(api_key_hash) = 64`,
   );
   const match = result.rows.find((p) => apiKeyMatches(header, p.api_key_hash));
   if (!match) {
@@ -41,7 +50,12 @@ export async function requirePartnerKey(req: PartnerRequest, res: Response, next
 
 export async function findPartnerByVirtualAddress(address: string): Promise<PartnerRow | null> {
   const r = await query<PartnerRow>(
-    `SELECT * FROM partners WHERE virtual_deposit_address = $1 AND status = 'active' LIMIT 1`,
+    `SELECT * FROM partners
+     WHERE virtual_deposit_address = $1
+       AND status = 'active'
+       AND api_key_hash IS NOT NULL
+       AND length(api_key_hash) = 64
+     LIMIT 1`,
     [address],
   );
   return r.rows[0] ?? null;
@@ -49,8 +63,15 @@ export async function findPartnerByVirtualAddress(address: string): Promise<Part
 
 export async function findPartnerByCode(code: string): Promise<PartnerRow | null> {
   const r = await query<PartnerRow>(
-    `SELECT * FROM partners WHERE code = $1 AND status = 'active' LIMIT 1`,
+    `SELECT * FROM partners
+     WHERE code = $1
+       AND status = 'active'
+       AND api_key_hash IS NOT NULL
+       AND length(api_key_hash) = 64
+     LIMIT 1`,
     [code],
   );
   return r.rows[0] ?? null;
 }
+
+export { hasIssuedApiKey };

@@ -3,7 +3,8 @@
 **Audience**: External solutions (S01, future partners) that consume TPS as the USDT ledger / transfer UI.
 
 **Base URL**: `https://bgp-001.com`  
-**Auth**: `X-Partner-Key: <api_key>` or `Authorization: Bearer <api_key>`
+**Auth**: `X-Partner-Key: <private_key>` or `Authorization: Bearer <private_key>`  
+Admin issues a public/private pair at `/admin/solution-keys` (both shown). Empty/revoked hash blocks Partner API.
 
 ## Endpoints
 
@@ -56,7 +57,7 @@ Body: `{ externalUserId, amountUsdt, gameAmount, idempotencyKey, partnerCode }`
 
 ```
 TPS_API_BASE_URL=https://bgp-001.com
-TPS_PARTNER_KEY=pk_s01_...
+TPS_PARTNER_KEY=<private_key>
 TPS_CALLBACK_SECRET=...
 ```
 

@@ -2,7 +2,13 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query, withTransaction } from '../db.js';
 import { appendLedger, getBalance } from '../ledger.js';
-import { applyFxFee, feePercentForSide, getSiteSettings, getSiteSpotQuote } from '../settings.js';
+import {
+  applyFxFee,
+  feePercentForSide,
+  getSiteSettings,
+  getSiteSpotQuote,
+} from '../settings.js';
+import { FX_REFRESH_INTERVALS, RATE_PROVIDERS } from '../rates.js';
 import { requireActiveTrader, requireAuth, type AuthedRequest } from '../middleware.js';
 
 export const ordersRouter = Router();
@@ -27,9 +33,51 @@ async function snapshotRate(side: 'buy' | 'sell'): Promise<{ spot: number; price
   return { spot, price, feePercent };
 }
 
+/** Floor to 2 decimal places (buy: give slightly less USDT when KRW×rate does not divide evenly). */
+function floor2(n: number): number {
+  return Math.floor(n * 100 + 1e-9) / 100;
+}
+
+/**
+ * Buy settlement: KRW is whole won; USDT = floor(KRW / price, 2).
+ * Prefer amountKrw; if only amountUsdt is sent, derive integer KRW then floor USDT.
+ */
+function normalizeBuyAmounts(
+  price: number,
+  input: { amountKrw?: number; amountUsdt?: number },
+): { amountKrw: number; amountUsdt: number } {
+  let amountKrw: number;
+  if (input.amountKrw != null && Number.isFinite(input.amountKrw) && input.amountKrw > 0) {
+    if (!Number.isInteger(input.amountKrw)) {
+      throw new Error('구매 원화 금액은 원 단위(정수)여야 합니다.');
+    }
+    amountKrw = input.amountKrw;
+  } else if (input.amountUsdt != null && Number.isFinite(input.amountUsdt) && input.amountUsdt > 0) {
+    amountKrw = Math.round(input.amountUsdt * price);
+  } else {
+    throw new Error('amountKrw 또는 amountUsdt가 필요합니다.');
+  }
+  if (!(amountKrw >= 1)) {
+    throw new Error('구매 원화 금액은 1원 이상이어야 합니다.');
+  }
+  const amountUsdt = floor2(amountKrw / price);
+  if (!(amountUsdt > 0)) {
+    throw new Error('환산된 USDT 수량이 너무 작습니다.');
+  }
+  return { amountKrw, amountUsdt };
+}
+
 /** User buys USDT from admin (admin sells) — ledger credit after KRW confirm. */
 ordersRouter.post('/buy', requireAuth, requireActiveTrader, async (req: AuthedRequest, res) => {
-  const body = z.object({ amountUsdt: z.number().positive() }).safeParse(req.body);
+  const body = z
+    .object({
+      amountKrw: z.number().positive().optional(),
+      amountUsdt: z.number().positive().optional(),
+    })
+    .refine((d) => d.amountKrw != null || d.amountUsdt != null, {
+      message: 'amountKrw or amountUsdt required',
+    })
+    .safeParse(req.body);
   if (!body.success) {
     res.status(400).json({ error: body.error.flatten() });
     return;
@@ -40,8 +88,7 @@ ordersRouter.post('/buy', requireAuth, requireActiveTrader, async (req: AuthedRe
   }
   try {
     const { price } = await snapshotRate('buy');
-    const amountUsdt = body.data.amountUsdt;
-    const amountKrw = Math.round(amountUsdt * price * 100) / 100;
+    const { amountKrw, amountUsdt } = normalizeBuyAmounts(price, body.data);
     const adminId = await getPlatformAdminId();
     if (adminId === req.user!.id) {
       res.status(400).json({ error: 'Admin cannot create OTC buy as user' });
@@ -84,8 +131,13 @@ ordersRouter.post('/sell', requireAuth, requireActiveTrader, async (req: AuthedR
   }
   try {
     const { price } = await snapshotRate('sell');
-    const amountUsdt = body.data.amountUsdt;
-    const amountKrw = Math.round(amountUsdt * price * 100) / 100;
+    const amountUsdt = Math.round(body.data.amountUsdt * 100) / 100;
+    // Whole-won KRW only (no decimals)
+    const amountKrw = Math.floor(amountUsdt * price + 1e-9);
+    if (!(amountKrw >= 1)) {
+      res.status(400).json({ error: '환산된 원화 금액이 너무 작습니다.' });
+      return;
+    }
     const adminId = await getPlatformAdminId();
     if (adminId === req.user!.id) {
       res.status(400).json({ error: 'Admin cannot create OTC sell as user' });
@@ -147,12 +199,18 @@ ordersRouter.get('/rate', requireAuth, async (req, res) => {
       spot != null && spot > 0 ? applyFxFee(spot, feePercent, side) : null;
     res.json({
       providerId: settings.fxRateProvider,
+      providerName:
+        RATE_PROVIDERS.find((p) => p.id === settings.fxRateProvider)?.name ??
+        settings.fxRateProvider,
       spotKrwPerUsdt: spot,
       rateKrwPerUsdt: effective,
       fxFeePercent: feePercent,
       fxBuyFeePercent: settings.fxBuyFeePercent,
       fxSellFeePercent: settings.fxSellFeePercent,
       fxRateRefreshInterval: settings.fxRateRefreshInterval,
+      fxRateRefreshIntervalLabel:
+        FX_REFRESH_INTERVALS.find((i) => i.id === settings.fxRateRefreshInterval)?.labelKo ??
+        settings.fxRateRefreshInterval,
       cached: quote.rawNote === 'cached',
       side,
       fetchedAt: quote.fetchedAt,

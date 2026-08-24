@@ -74,7 +74,7 @@ Core tables (migration series under `04_script/db/`):
 
 1. **users** — id, email/phone, password hash, role (`user`|`admin`), status (`pending_approval`|`active`|`suspended`|`deleted`|`rejected`), timestamps UTC  
    - Self-register → `pending_approval`. **Trade gates** (create/accept listing, start trade) require `active`. Login OK while pending (read-only / wait UI).
-2. **bank_accounts** — user_id **or** platform/admin custody flag, bank_code, account_no (masked), holder_name, verified_at  
+2. **bank_accounts** — user_id **or** platform/admin custody flag, bank_name, account_no (masked), holder_name, verified_at  
 3. **tether_wallets** — user_id **or** admin custody wallet, chain=`TRC-20` (only), address, label, status  
 4. **custody_accounts** (or flags on 2/3) — admin KRW bank + admin USDT wallet shown to users per trade  
 5. **listings** — type (`buy`|`sell`), **owner_user_id**, price_krw_per_usdt, amount_usdt, min/max, status (`open`|`matched`|`closed`|`hidden`)  

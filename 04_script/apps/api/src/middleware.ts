@@ -35,6 +35,14 @@ export function requireAdmin(req: AuthedRequest, res: Response, next: NextFuncti
   next();
 }
 
+export function requireAgent(req: AuthedRequest, res: Response, next: NextFunction) {
+  if (!req.user || req.user.role !== 'agent') {
+    res.status(403).json({ error: 'Agent only' });
+    return;
+  }
+  next();
+}
+
 export function requireActiveTrader(req: AuthedRequest, res: Response, next: NextFunction) {
   if (!req.user) {
     res.status(401).json({ error: 'Unauthorized' });

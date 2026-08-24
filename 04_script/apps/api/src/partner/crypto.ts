@@ -12,6 +12,19 @@ export function generateApiKey(prefix = 'pk'): string {
   return `${prefix}_${randomBytes(24).toString('base64url')}`;
 }
 
+export function generatePartnerKeyPair(code: string): { publicKey: string; privateKey: string } {
+  const tag = code.replace(/[^a-z0-9]/g, '').slice(0, 16) || 'pt';
+  return {
+    publicKey: generateApiKey(`ak_${tag}`),
+    privateKey: generateApiKey(`sk_${tag}`),
+  };
+}
+
+/** UI-only fake TRC-20 (34 chars). Not a real on-chain address. */
+export function generateVirtualDepositAddress(): string {
+  return `T${randomBytes(17).toString('hex').slice(0, 33)}`;
+}
+
 export function apiKeyMatches(raw: string, hash: string): boolean {
   const a = Buffer.from(hashApiKey(raw), 'utf8');
   const b = Buffer.from(hash, 'utf8');

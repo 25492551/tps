@@ -7,14 +7,16 @@ import { getSiteSettings } from '../settings.js';
 import { toPublicUser, type DbUser } from '../types.js';
 import { verifyHandoffToken } from '../partner/crypto.js';
 import { findPartnerByCode } from '../partner/partners.js';
-
+import { normalizeLoginId } from '../loginId.js';
+import { recordUserAccess } from '../accessLog.js';
+import { consumeCaptcha, issueCaptcha } from '../captcha.js';
 export const authRouter = Router();
 
 async function assertBrowserMultiAccountAllowed(
   req: { body?: { browserUserId?: string }; headers: Record<string, unknown> },
   nextUser: { id: string; role: string },
 ) {
-  if (nextUser.role === 'admin') return;
+  if (nextUser.role === 'admin' || nextUser.role === 'agent') return;
 
   const settings = await getSiteSettings();
   if (settings.allowMultiAccountBrowser) return;
@@ -33,7 +35,7 @@ async function assertBrowserMultiAccountAllowed(
   if (token) {
     try {
       const payload = verifyToken(token);
-      if (payload.role !== 'admin') tokenUserId = payload.sub;
+      if (payload.role !== 'admin' && payload.role !== 'agent') tokenUserId = payload.sub;
     } catch {
       tokenUserId = undefined;
     }
@@ -82,6 +84,7 @@ authRouter.post('/handoff', async (req, res) => {
     }
     const user = toPublicUser(row);
     const token = signToken({ sub: user.id, role: user.role, status: user.status });
+    await recordUserAccess(req, user.id, 'handoff');
     res.json({
       token,
       user,
@@ -109,10 +112,16 @@ authRouter.get('/partner/:code', async (req, res) => {
   });
 });
 
+authRouter.get('/captcha', (_req, res) => {
+  const { id, imageSvg } = issueCaptcha();
+  res.json({ id, imageSvg });
+});
+
 authRouter.post('/login', async (req, res) => {
   const body = z
     .object({
-      email: z.string().email(),
+      email: z.string().min(1).max(80).optional(),
+      loginId: z.string().min(1).max(80).optional(),
       password: z.string().min(1),
       browserUserId: z.string().uuid().optional(),
     })
@@ -121,17 +130,21 @@ authRouter.post('/login', async (req, res) => {
     res.status(400).json({ error: 'Invalid credentials payload' });
     return;
   }
-  const result = await query<DbUser>('SELECT * FROM users WHERE email = $1', [
-    body.data.email.toLowerCase(),
-  ]);
+  const rawId = body.data.loginId || body.data.email || '';
+  const loginId = normalizeLoginId(rawId);
+  if (!loginId) {
+    res.status(400).json({ error: 'Invalid credentials payload' });
+    return;
+  }
+  const result = await query<DbUser>('SELECT * FROM users WHERE lower(email) = $1', [loginId]);
   const row = result.rows[0];
   if (!row || row.status === 'deleted') {
-    res.status(401).json({ error: 'Invalid email or password' });
+    res.status(401).json({ error: 'Invalid login id or password' });
     return;
   }
   const ok = await verifyPassword(body.data.password, row.password_hash);
   if (!ok) {
-    res.status(401).json({ error: 'Invalid email or password' });
+    res.status(401).json({ error: 'Invalid login id or password' });
     return;
   }
   const user = toPublicUser(row);
@@ -145,7 +158,74 @@ authRouter.post('/login', async (req, res) => {
     res.status(status).json({ error: e instanceof Error ? e.message : 'Forbidden' });
     return;
   }
+
+  // Admins must use POST /auth/admin-login (captcha on the same form).
+  if (user.role === 'admin') {
+    res.status(401).json({ error: 'Invalid login id or password' });
+    return;
+  }
+
   const token = signToken({ sub: user.id, role: user.role, status: user.status });
+  await recordUserAccess(req, user.id, 'login');
+  res.json({ token, user });
+});
+
+/** Admin login: password + captcha in one request. */
+authRouter.post('/admin-login', async (req, res) => {
+  const body = z
+    .object({
+      email: z.string().min(1).max(80).optional(),
+      loginId: z.string().min(1).max(80).optional(),
+      password: z.string().min(1),
+      captchaId: z.string().min(1).max(64),
+      captchaAnswer: z.string().min(1).max(16),
+      browserUserId: z.string().uuid().optional(),
+    })
+    .safeParse(req.body);
+  if (!body.success) {
+    res.status(400).json({ error: 'Invalid credentials payload' });
+    return;
+  }
+  if (!consumeCaptcha(body.data.captchaId, body.data.captchaAnswer)) {
+    res.status(400).json({
+      error: '자동 접속 방지 문자가 올바르지 않습니다. 새로고침 후 다시 입력하세요.',
+    });
+    return;
+  }
+  const rawId = body.data.loginId || body.data.email || '';
+  const loginId = normalizeLoginId(rawId);
+  if (!loginId) {
+    res.status(400).json({ error: 'Invalid credentials payload' });
+    return;
+  }
+  const result = await query<DbUser>('SELECT * FROM users WHERE lower(email) = $1', [loginId]);
+  const row = result.rows[0];
+  if (!row || row.status === 'deleted') {
+    res.status(401).json({ error: 'Invalid login id or password' });
+    return;
+  }
+  const ok = await verifyPassword(body.data.password, row.password_hash);
+  if (!ok) {
+    res.status(401).json({ error: 'Invalid login id or password' });
+    return;
+  }
+  const user = toPublicUser(row);
+  if (user.role !== 'admin') {
+    res.status(403).json({ error: '이 페이지는 관리자 전용입니다. /login 을 이용하세요.' });
+    return;
+  }
+  try {
+    await assertBrowserMultiAccountAllowed(
+      { body: body.data, headers: req.headers as Record<string, unknown> },
+      user,
+    );
+  } catch (e) {
+    const status = (e as { status?: number }).status ?? 403;
+    res.status(status).json({ error: e instanceof Error ? e.message : 'Forbidden' });
+    return;
+  }
+  const token = signToken({ sub: user.id, role: user.role, status: user.status });
+  await recordUserAccess(req, user.id, 'login');
   res.json({ token, user });
 });
 

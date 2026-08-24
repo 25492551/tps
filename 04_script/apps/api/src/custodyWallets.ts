@@ -61,10 +61,24 @@ export async function listCustodyWalletsWithBalances() {
     }),
   );
   const totalUsdt = withBal.reduce((s, w) => s + (w.balanceUsdt ?? 0), 0);
+  const rounded = Math.round(totalUsdt * 100) / 100;
+  totalUsdtCache = { value: rounded, at: Date.now() };
   return {
     wallets: withBal,
-    totalUsdt: Math.round(totalUsdt * 100) / 100,
+    totalUsdt: rounded,
   };
+}
+
+let totalUsdtCache: { value: number; at: number } | null = null;
+const TOTAL_USDT_CACHE_MS = 20_000;
+
+/** Cached sum of custody on-chain USDT (for admin top bar). */
+export async function getCustodyTotalUsdtCached() {
+  if (totalUsdtCache && Date.now() - totalUsdtCache.at < TOTAL_USDT_CACHE_MS) {
+    return totalUsdtCache.value;
+  }
+  const { totalUsdt } = await listCustodyWalletsWithBalances();
+  return totalUsdt;
 }
 
 async function clearCustodyDefaults() {
@@ -160,7 +174,7 @@ export async function createCustodyTransfer(opts: {
   createdBy: string;
 }) {
   if (opts.fromWalletId === opts.toWalletId) {
-    throw Object.assign(new Error('from and to wallets must differ'), { status: 400 });
+    throw Object.assign(new Error('출금과 입금 지갑은 달라야 합니다.'), { status: 400 });
   }
   const wallets = await query(
     `SELECT id FROM tether_wallets
